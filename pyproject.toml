@@ -1,0 +1,32 @@
+[project]
+name = "overcontextomitter"
+version = "0.1.0"
+description = "番組理解コア — 録画番組/動画を LLM に見せて理解させ、人格を差すと固有の感想・予想・期待を生む汎用モジュール。"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40",          # OpenAI 互換アダプタ（vLLM / Ollama / LM Studio / llama.cpp / クラウド）
+    "anthropic>=0.40",       # Anthropic ネイティブアダプタ（Claude・prompt caching / tool use）
+    "fastapi>=0.110",        # HTTP API（薄いトランスポート）
+    "uvicorn[standard]>=0.27",  # ASGI サーバ（常駐 API）
+    "httpx>=0.27",           # webhook プッシュ
+    "mcp>=1.2",              # MCP サーバ（FastMCP・stdio）
+    "numpy>=1.26",           # JL CM検出（ロゴ持続エッジ解析）
+    "faster-whisper>=1.0",   # 字幕なしメディアの音声書き起こし（ASR）
+]
+
+[project.scripts]
+oco = "oco.cli:main"
+oco-mcp = "oco.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["oco"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]

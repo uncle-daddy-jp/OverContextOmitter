@@ -1,0 +1,8 @@
+store/
+recordings/
+config.toml
+.git/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

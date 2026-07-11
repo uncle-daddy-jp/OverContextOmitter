@@ -1,0 +1,96 @@
+# OverContextOmitter — 番組理解コア
+#
+# 3つの使い方を1イメージで:
+#   - oco      : CLI 都度run（`docker compose run --rm oco <subcommand>`）
+#   - oco-api  : 常駐 HTTP API（:8910）。入力(POST)・取り出し(GET)・webhookプッシュ
+#   - oco-mcp  : stdio MCP（クライアントが `run --rm -T oco-mcp` で spawn）
+# 全サービスが同じ SQLite(named volume oco_store) と config を共有する。
+#
+# SQLite(WAL) はローカルFS必須なので store は named volume に置く
+# （Windows の bind mount だと WAL/ロックが壊れうる）。録画入力だけ bind。
+services:
+  oco:
+    build: .
+    image: overcontextomitter
+    volumes:
+      - ./oco:/app/oco                       # dev: 編集即反映（-e .）
+      - ./config.toml:/app/config.toml:ro
+      - oco_store:/data/store                # SQLite(oco.db)
+      - oco_models:/root/.cache/huggingface  # Whisper(ASR) モデルキャッシュ
+      - ./recordings:/recordings             # 録画TS/.ass（CLI extract が .ass を書くので rw）
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OCO_LLM_API_KEY=${OCO_LLM_API_KEY:-}
+      - OCO_WEBHOOK_SECRET=${OCO_WEBHOOK_SECRET:-}
+      - OCO_API_TOKEN=${OCO_API_TOKEN:-}
+      - OCO_CONFIG=/app/config.toml
+
+  oco-api:
+    image: overcontextomitter
+    entrypoint: ["uvicorn", "oco.api:app", "--host", "0.0.0.0", "--port", "8910", "--workers", "1"]
+    ports: ["8910:8910"]
+    restart: unless-stopped
+    volumes:
+      - ./oco:/app/oco
+      - ./config.toml:/app/config.toml:ro
+      - oco_store:/data/store
+      - ./recordings:/recordings:ro         # 録画置き場（NAS 等は docker-compose.override.yml で差替）
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OCO_LLM_API_KEY=${OCO_LLM_API_KEY:-}
+      - OCO_WEBHOOK_SECRET=${OCO_WEBHOOK_SECRET:-}
+      - OCO_API_TOKEN=${OCO_API_TOKEN:-}
+      - OCO_CONFIG=/app/config.toml
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8910/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  oco-mcp:
+    image: overcontextomitter
+    profiles: ["mcp"]
+    entrypoint: ["oco-mcp"]
+    stdin_open: true
+    tty: false
+    volumes:
+      - ./oco:/app/oco
+      - ./config.toml:/app/config.toml:ro
+      - oco_store:/data/store
+      - ./recordings:/recordings:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OCO_LLM_API_KEY=${OCO_LLM_API_KEY:-}
+      - OCO_CONFIG=/app/config.toml
+
+  # テスト専用（同じイメージで pytest）
+  oco-test:
+    image: overcontextomitter
+    profiles: ["test"]
+    entrypoint: ["python", "-m", "pytest", "-q"]
+    volumes:
+      - ./oco:/app/oco
+      - ./tests:/app/tests
+
+volumes:
+  oco_store:
+  oco_models:
+
+# 録画が NAS にある場合は docker-compose.override.yml（gitignore 済）で
+# /recordings を CIFS ボリュームに差し替えられる。例:
+#
+#   services:
+#     oco-api:
+#       volumes:
+#         - tv_recordings:/recordings:ro
+#   volumes:
+#     tv_recordings:
+#       driver: local
+#       driver_opts:
+#         type: cifs
+#         o: "username=${NAS_SMB_USER},password=${NAS_SMB_PASSWORD},ro,vers=3.0,uid=0,gid=0,file_mode=0444,dir_mode=0555,iocharset=utf8"
+#         device: "//<nas-host>/<share>/TV"
+#
+# 認証情報は .env（gitignore 済）に置く。日本語ファイル名のため iocharset=utf8。

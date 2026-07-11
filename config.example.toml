@@ -1,0 +1,91 @@
+# OverContextOmitter 設定例。`config.toml` にコピーして編集する。
+# コードはエンドポイントを知らない（ここで切り替える）。APIキーは環境変数で渡す。
+
+store_dir = "/data/store"         # データの保存先（ローカルFS必須＝WAL）
+# db_path = "/data/store/oco.db"  # 省略時 store_dir/oco.db（SQLite が唯一の store）
+recall_fts = false                # recall は LIKE 既定（日本語短語は FTS 無力）
+media_root = "/recordings"        # media_path はこの配下のみ許可（トラバーサル防止）
+
+# ── 階層ローリング圧縮（§4.5・長編/小コンテキスト窓対応） ──────────────
+# block_size 話ごとに過去を1つの「まとめ」へ圧縮し、毎ターンの作業コンテキストを有界化する。
+# 生レイヤー（各話 story/感想・全セリフ）は圧縮も削除もされず recall の対象のまま。
+# 40話でも封印要約＋進行中の生≈8k tok に収まり、8k〜32k 窓のローカルモデルでも動く。
+# 0 で無効化＝全話ベタ貼り（コンテキストが広いモデル向け）。
+[core]
+block_size = 5
+
+# ── LLM: text（理解・あらすじ・感想・予想） ───────────────────────────
+# provider = "openai_compat"（vLLM/Ollama/LM Studio/llama.cpp/OpenAI/OpenRouter…）
+#          | "anthropic"（Claude 公式SDK・prompt caching/tool use）
+[llm.text]
+provider = "openai_compat"
+model    = "gemma-4-26b"                       # サーバ側のモデル名に合わせる
+base_url = "http://localhost:8000/v1"          # OpenAI互換サーバ（vLLM/llama.cpp/Ollama等）
+api_key_env = "OCO_LLM_API_KEY"                # 環境変数名。ローカルは未設定でも可
+max_tokens = 12000
+# sampling（openai_compat のみ。anthropic では無視＝送らない）
+# anti-loop 実証値（ローカルモデル用）。Claude 4.x には送らない（400 になる）。
+temperature = 0.7
+frequency_penalty = 0.6
+presence_penalty  = 0.4
+
+# クラウド Claude に切り替える例（コメントアウトを外して上を消す）:
+# [llm.text]
+# provider = "anthropic"
+# model    = "claude-opus-4-8"
+# api_key_env = "ANTHROPIC_API_KEY"
+# max_tokens = 12000
+
+# ── LLM: vision（映像 scene 抽出のフレーム解釈） ──────────────────────
+# 未設定なら scene 抽出は無効（字幕だけ）。text と同一モデルが画像対応なら使い回せる。
+# [llm.vision]
+# provider = "openai_compat"
+# model    = "gemma4-26b"                       # マルチモーダルなら text と同一でも可
+# base_url = "http://localhost:8000/v1"
+# api_key_env = "OCO_LLM_API_KEY"
+# max_tokens = 400
+
+# ── 映像 scene 抽出（[llm.vision] 設定 + process --video のとき） ──────
+# [scene]
+# min_gap = 4.0        # 字幕の空白の下限秒（息継ぎ除外）
+# max_gap = 30.0       # 上限秒（超えるとCM疑いで除外）
+# max_frames = 12      # 1話で覗くフレーム上限（firehose禁止）
+# frame_width = 768    # VLMへ渡す縮小幅
+
+# ── 台本ソース（字幕 / 字幕なしASR） ──────────────────────────────────
+# [transcript]
+# backend = "auto"          # "auto"(字幕有→aribcaption/無→whisper) | "aribcaption" | "whisper"
+# whisper_model = "small"   # tiny/base/small/medium/large-v3（大きいほど高精度・遅い）
+# whisper_device = "cpu"    # GPUがあれば "cuda"
+# whisper_compute_type = "int8"
+# whisper_language = "ja"
+
+# ── CM 検出（テキスト段ではセリフ行を CM レンジでマスク） ──────────────
+# backend = "none"   … CM検出しない（既定。まず字幕だけで回す）
+#         | "jl"     … join_logo_scp + logoframe（ロゴ検出ベース・要ツール配置）
+#         | "chapter"… 既存のチャプター/AVS サイドカーを読む
+[cm]
+backend = "none"          # "none" | "jl"(ロゴ検出・自前/民放のCMフレーム除外) | "chapter"
+# JL は局ロゴの有無を NCC で見て CM レンジを出す（暗いCMも捕捉・外部ツール不要・動画が要る）。
+# 既定値で概ね動く。CM検出レンジは テキスト行マスク＋画像フレーム除外の両方に使われる。
+# fps = 0.5                # 解析サンプリング(0.5=2秒ごと・大きいほど精密で遅い)
+# min_cm_sec = 12.0        # この長さ以上のロゴ消失=CM
+# presence_threshold = 0.35  # フレーム勾配とロゴテンプレのNCCがこれ未満=ロゴ消失
+# logo_frac = 0.5          # ロゴ画素=平均勾配が最大×これ以上
+
+# ── HTTP API（常駐 oco-api） ───────────────────────────────────
+[api]
+host = "0.0.0.0"
+port = 8910
+max_workers = 1                   # LLM並列度。ローカルLLM1台なら1推奨（多重OOM対策）
+
+# ── 認証（既定 無認証＝LAN内信頼） ─────────────────────────────
+# token_env を設定すると API/MCP が bearer 必須化（独立トークン推奨）。
+# [auth]
+# token_env = "OCO_API_TOKEN"
+
+# ── プッシュ出力（webhook） ────────────────────────────────────
+[webhook]
+default_url = ""                  # 既定プッシュ先。submit の webhook_url が優先
+secret_env  = "OCO_WEBHOOK_SECRET"  # 任意。HMAC署名 X-OCO-Signature
+retry_max   = 3

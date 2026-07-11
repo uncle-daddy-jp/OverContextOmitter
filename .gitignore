@@ -1,0 +1,24 @@
+# ローカル設定・APIキー・生成物・素材は配布しない
+config.toml
+docker-compose.override.yml
+store/
+recordings/
+*.ass
+*.ts
+.env
+
+# ローカル専用の人格（同梱するのは default.txt などの例のみ）
+oco/personas/*.txt
+!oco/personas/default.txt
+
+# 内部設計ドキュメント（配布しない）
+docs/design/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+dist/
+build/

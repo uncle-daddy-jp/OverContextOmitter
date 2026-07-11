@@ -1,0 +1,5 @@
+# コンテナ(Linux)で動くので改行は LF 固定（Windowsチェックアウトでも CRLF にしない）
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.lgd binary
