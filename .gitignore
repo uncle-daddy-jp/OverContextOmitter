@@ -3,6 +3,7 @@ config.toml
 docker-compose.override.yml
 store/
 recordings/
+models/
 *.ass
 *.ts
 .env

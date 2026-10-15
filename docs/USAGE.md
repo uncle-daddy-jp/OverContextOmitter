@@ -31,6 +31,22 @@ docker compose --profile test run --rm oco-test
 全サービスが同じ SQLite（named volume `oco_store`）と `config.toml` を共有する。
 録画は `./recordings` に置く（compose で `/recordings` にマウント）。
 
+### 意味で引く検索を使うとき（任意）
+
+セリフ・場面の検索（`/lines/search`）を、言い回しの問いでも当たるようにする機能。使わないなら何もしなくてよい（文字の一致だけで動く）。
+
+1. モデルを入手する: Hugging Face の `ggml-org/embeddinggemma-2-GGUF` から
+   `embeddinggemma-2-Q8_0.gguf`（約 310MB）をダウンロードし、`./models/` に置く。
+2. 埋め込みサーバーを起動する: `docker compose up -d oco-embed`
+3. `config.toml` に `[embed]` を書き（A-2 参照）、`oco-api` を再起動する。
+4. 処理済みの過去の話を埋め戻す: `docker compose run --rm oco embed --all`
+
+目安:
+- CPU で動く（GPU 不要）。メモリは約 400MB。
+- 新しい話の取り込みは、1 話あたり数秒〜10 秒ほど長くなる。
+- 埋め戻しは 1 話 10 秒前後（約 250 話で 30 分）。
+- モデルのライセンス: EmbeddingGemma 2 は Apache 2.0（Google DeepMind）。
+
 ## A-2. 設定（config.toml）の要点
 
 | キー | 意味 |
@@ -41,11 +57,12 @@ docker compose --profile test run --rm oco-test
 | `[llm.text]` | 理解・感想生成のLLM。`provider`(openai_compat/anthropic)・`model`・`base_url`・`api_key_env`・`max_tokens`（=本文ぶん）・`thinking_budget`（-1=完走/0=OFF/N=ソフト上限）・anti-loop sampling |
 | `[llm.vision]` | 映像 scene のVLM（未設定なら scene 無効）。Gemma 等のマルチモーダルを流用可 |
 | `[scene]` | scene 抽出（`min_gap`/`max_gap`/`max_frames`/`frame_width`） |
-| `[cm]` | CM検出。`backend`=none/jl（ロゴNCC・民放のCMフレーム除外）。`max_cm_frac`超で不安定→CM無しフォールバック |
+| `[cm]` | CM検出。`backend`=none/chapter（Amatsukazeチャプターsidecar読取・推奨）/jl（自前ロゴNCC・引退） |
 | `[transcript]` | 台本ソース。`backend`=auto（字幕有→ARIB抽出/無→whisper）/aribcaption/whisper。`whisper_model`(small〜large-v3)/`whisper_device`(cpu/cuda) |
 | `[api]` | 常駐API。`host`/`port`/`max_workers`（LLM並列度・ローカルGPUは1推奨） |
 | `[webhook]` | プッシュ出力。`default_url`/`secret_env`/`retry_max` |
 | `[auth]` | `token_env` を設定すると API/MCP が bearer 必須化（既定 無認証＝LAN内信頼） |
+| `[embed]` | 意味で引く検索。`base_url`（埋め込みサーバーの URL・compose なら `http://oco-embed:8080`）/`model`（`eg2`＝サーバーの `--alias`）。未設定なら従来どおり文字の一致だけ |
 
 **LLMは config 切替でエンドポイントを知らない**。ローカル（vLLM/llama.cpp/Ollama）＝
 `openai_compat`、クラウド Claude＝`anthropic`。
@@ -69,6 +86,10 @@ docker compose run --rm oco get  --title "フリーレン" --ep 29 [--persona <i
 docker compose run --rm oco recall --title "フリーレン" 鍵
 docker compose run --rm oco list  [--title "フリーレン"]
 
+# 意味で引く検索のベクトルを作る（[embed] 設定時・処理済みの話を全部 / 1 作品だけ）
+docker compose run --rm oco embed --all
+docker compose run --rm oco embed --title "フリーレン"
+
 # 補助（任意）: TS の字幕ストリーム確認 / TS→.ass 抽出だけ実行
 docker compose run --rm oco probe   --ts /recordings/ep29.ts
 docker compose run --rm oco extract --ts /recordings/ep29.ts --ass /recordings/ep29.ass
@@ -84,7 +105,20 @@ docker compose up -d oco-api
 curl "http://localhost:8910/episodes/29?title=葬送のフリーレン(第2期)&persona_id=default"
 curl -X POST localhost:8910/episodes -H 'content-type: application/json' \
   -d '{"title":"...","episode":30,"media_path":"/recordings/ep30.ts"}'
+
+# うろ覚えのセリフ・出来事を全話から探す
+curl "http://localhost:8910/lines/search?title=フリーレン&q=鍵をなくした場面"
 ```
+
+`GET /lines/search`（`q`・`title`・任意で `episode`/`context`/`limit`）は、セリフ（`hits`）・
+場面説明（`scene_hits`）・あらすじの文（`story_hits`）を前後の文脈つきで返す。
+`[embed]` を設定して埋め戻しが済んでいると、意味で引く検索になる:
+- 「兵士が塹壕に隠れている場面」のような言い回しでも当たる。
+- 文字がたまたま重なっただけの外れは返さず、`found=false`（近いものは `low_confidence=true` で参考に付く）。
+- 返り値に `"search": "semantic"` が付く（文字の一致だけで探したときは `"lexical"`）。
+- セリフをそのまま引用した問いは、従来どおり文字の一致で当てる。
+
+MCP の `oco_search_lines` も同じ動きをする。
 
 ---
 
@@ -116,6 +150,11 @@ curl -X POST localhost:8910/episodes -H 'content-type: application/json' \
   "review": { "impression": "...", "outlook": "..." }  // ③ 感想 + 予想・期待（人格）
 }
 ```
+
+`outlook` は**連続もののときだけ中身が入る**。単発回（映画・1話完結・最終回・単発特番・
+情報/通販番組、および話数が日付 `YYYYMMDD` の回）は次回が無いので予想を生成せず、
+`outlook` は **空文字 `""`**（NULL ではない）。話一覧の `has_outlook`（`IS NOT NULL` 判定）は
+true のままなので、既存の呼び出し側は無改修で動く。空か否かで「予想あり/なし」を見ること。
 
 | 取り出し | MCP ツール | API |
 |---|---|---|
@@ -184,11 +223,30 @@ webhook は**通知**であってプルは常時可能。配送 at-least-once＝
 - **連続もの/オムニバス**: フラグ無し。モデルが今回の台本を見て**地続きか毎回判断**する。
   連続なら前回の予想と照らす（答え合わせ）・人物相関を引き継ぐ。独立回（1話完結）なら前回を
   無理に持ち込まず、今回出ないゲストは相関から外す。
+- **単発判定（次回予想の有無）**: 感想の後に小さな判定コールを1回入れ、この回が「次回に続く
+  連続もの」か「単発」かを決める（話数が日付 `YYYYMMDD` の回は判定コールすら打たず単発）。
+  単発なら **③予想をLLMに書かせず `outlook` に空文字を保存**する（無い次回を予想させると捏造に
+  なるため）。判定結果と理由は `oco_episodes.serial_next` / `serial_next_reason` に残る（監査用）。
+  1行目が「連続」「単発」のどちらでもなければ安全側＝連続扱い（従来どおり予想を出す）。
+- **あらすじの検証（①の直後）**: 台本とあらすじを突き合わせ、**大幅な誤りだけ**（人物の取り違え・
+  因果関係の逆転・台本にない出来事の捏造・主軸となる出来事の欠落）を挙げる検証コールを1回打つ。
+  出力は単発判定と同じ「1行目に判定語」方式で、**1行目が `大幅な誤りあり` のときだけ**2行目以降の
+  箇条書きを添えて**1回だけ**あらすじを書き直し、書き直し後を②③③と保存に使う（再検証はしない＝
+  ループしない）。`問題なし`・形式を守らない出力・指摘が空なら書き直さない（安全側＝無駄なコールを
+  打たない）。細部の省略・表現の差は指摘対象外＝要約であることは仕様。
+  検証結果は `oco_episodes.story_check_text` に生のまま残る（監査用）。
+- **ASR台本の警告**: 台本が音声認識（whisper）由来のときだけ、各パスのプロンプトに「聞き間違い・
+  同音異義語の誤変換・歌詞の誤転写を含みうる／不確かな固有名詞は役割語で書く」旨の警告を注入する
+  （実害の例: 「トスパン中尉」→「トスパン注意」が人物相関に定着）。字幕由来なら一切注入しない
+  ＝従来と完全同一のプロンプト。注入先は volatile 側のみで、3人格パスが共有する安定プレフィックス
+  （プロンプトキャッシュの対象）は触らない。
 - **話者同定（②）**: `speaker_naming=true` で有効。クラスタ有（ARIB色キー）→人物相関を候補に
   LLMがクラスタ命名（呼びかけ手がかり）。クラスタ無（ASR）→テキストだけ行ごと推定。
   確信のみ・不明は付けない（部分被覆＝完璧でなくてよい）。声紋による回またぎ同一性（③）は別タスク。
-- **CM（JL）**: `backend=jl` で局ロゴをNCC（明るさ不変）検出→CMレンジ。テキスト行マスク＋
-  映像フレーム除外の両方に使う。NHK等CM無しや検出不安定（>40%）はCM無しにフォールバック。
+- **CM（chapter）**: `backend=chapter`（既定）でエンコーダ（Amatsukaze の join_logo_scp＋局ロゴ）が
+  録画の横に出すチャプター sidecar（OGM形式・名前に CM）を読む→CMレンジ。テキスト行マスク＋
+  映像フレーム除外の両方に使う。sidecar 無し/パース不能は CM 無し扱い（安全側）。
+  旧 `backend=jl`（自前ロゴNCC検出）は白半透明ロゴ×明るい画面で誤検出するため引退（ロールバック用に残置）。
 - **映像 scene**: `[llm.vision]`設定＋動画があると、字幕の空白（無言で映像が語る所）を時間軸均等に
   選んでVLMが説明→`〔映像〕`として台本に時刻挿入。
 - **thinking budget**: ローカル Gemma の思考を `thinking_budget` で制御（小=速い/-1=完走/0=OFF）。

@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS oco_episodes (   -- 客観（persona非依存・1行/
   cast_roster_text     TEXT,                -- 人物相関(carry-forward・客観・取り違え防止の接地)
   story_objective_text TEXT,                -- ① 客観あらすじ（接地固定・捏造禁止）
   story_model          TEXT,                -- 生成モデル名（provenance）
+  story_check_text     TEXT,                -- ① の検証結果（大幅な誤りの指摘 or「問題なし」・監査用）
+  serial_next          INTEGER,             -- 1=次回に続く連続もの / 0=単発（次回予想を出さない） / NULL=旧データ・未判定
+  serial_next_reason   TEXT,                -- 上の判定理由（監査用）
   n_lines              INTEGER,
   n_masked             INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -91,6 +94,20 @@ CREATE TABLE IF NOT EXISTS oco_block_views ( -- §4.5 主観ブロックダイ�
   PRIMARY KEY (series_id, block_index, persona_id),
   FOREIGN KEY (series_id, block_index)
     REFERENCES oco_blocks(series_id, block_index) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS oco_vectors (    -- 意味で引く検索の文書ベクトル（[embed] 設定時のみ書く）
+  series_id      TEXT NOT NULL,
+  episode_number INTEGER NOT NULL,
+  doc_kind       TEXT NOT NULL,              -- win30(30秒窓) | scene | story(あらすじの1文)
+  doc_seq        INTEGER NOT NULL,           -- win30=start_sec//30 / scene=line_seq / story=文の番号
+  start_sec      REAL,
+  doc_text       TEXT NOT NULL,
+  model          TEXT NOT NULL,
+  vec            BLOB NOT NULL,              -- float32・L2 正規化済み
+  PRIMARY KEY (series_id, episode_number, doc_kind, doc_seq),
+  FOREIGN KEY (series_id, episode_number)
+    REFERENCES oco_episodes(series_id, episode_number) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS oco_jobs (       -- 非同期ジョブ（同一DB同居）

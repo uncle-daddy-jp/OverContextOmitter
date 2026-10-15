@@ -6,6 +6,7 @@
   oco list    [--title <作品名>]                               # 作品一覧 / 話一覧
   oco extract --ts <file> --ass <out>                         # TS→.ass（ffmpeg・要TS）
   oco probe   --ts <file>                                     # 字幕ストリーム確認
+  oco embed   --all | --title <作品名>                          # 意味検索のベクトルを埋め戻す
   oco serve-api                                               # ローカルデバッグ用に API 起動
 """
 
@@ -122,6 +123,40 @@ def _cmd_probe(args) -> int:
     return 0
 
 
+def _cmd_embed(args) -> int:
+    """処理済みの話の文書ベクトルを作り直す（過去話の埋め戻し）。"""
+    from .embed import embed_episode
+    from .pipeline import build_store
+
+    svc = _svc(args)
+    if not svc.cfg.embed_base_url:
+        print("エラー: config に [embed] base_url が無い")
+        return 1
+    if args.all:
+        targets = svc.list_series()
+    else:
+        try:
+            targets = [svc.resolve_series(title=args.title, series_id=args.series_id)]
+        except (AmbiguousSeries, SeriesNotFound) as e:
+            print(f"エラー: {e}")
+            return 1
+    n_ep = n_doc = n_fail = 0
+    for s in targets:
+        store = build_store(svc.cfg, s["series_id"], s["title"])
+        for ep in store.processed_episodes():
+            try:
+                n = embed_episode(svc.cfg, store, ep)
+            except Exception as e:
+                n_fail += 1
+                print(f"  失敗 [{s['title']}] 第{ep}話: {e!r}")
+                continue
+            n_ep += 1
+            n_doc += n
+            print(f"  [{s['title']}] 第{ep}話  {n}件")
+    print(f"完了: {n_ep}話 {n_doc}件（失敗 {n_fail}話）")
+    return 1 if n_fail else 0
+
+
 def _cmd_serve_api(args) -> int:
     import uvicorn
 
@@ -178,6 +213,13 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("probe", help="TS の字幕ストリーム確認")
     sp.add_argument("--ts", required=True)
     sp.set_defaults(func=_cmd_probe)
+
+    sp = sub.add_parser("embed", help="意味で引く検索用のベクトルを作る（過去話の埋め戻し）")
+    g = sp.add_mutually_exclusive_group(required=True)
+    g.add_argument("--all", action="store_true", help="全作品の処理済みの話")
+    g.add_argument("--title", default=None)
+    sp.add_argument("--series-id", default=None)
+    sp.set_defaults(func=_cmd_embed)
 
     sp = sub.add_parser("serve-api", help="API をローカル起動（デバッグ用）")
     sp.set_defaults(func=_cmd_serve_api)

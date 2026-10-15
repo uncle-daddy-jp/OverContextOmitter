@@ -25,6 +25,59 @@ from __future__ import annotations
 from . import prompts
 
 
+# ── 巨大単話transcriptの map-reduce 圧縮（context 溢れ根絶・しきい値超のときだけ） ──
+def transcript_too_large(transcript: str, cfg) -> bool:
+    """単話transcriptがしきい値（文字数）超か。超過時のみ圧縮する。"""
+    return len(transcript or "") > getattr(cfg, "condense_threshold_chars", 30000)
+
+
+def _split_transcript_by_lines(transcript: str, chunk_chars: int) -> list[str]:
+    """行（改行split）境界を保ったまま各チャンクが概ね chunk_chars 以下になるよう貪欲に詰める。
+
+    1行が chunk_chars を超えても必ず1チャンクに入れて無限増殖させない
+    （バッファが空なら閾値超でもその1行を入れる）。最後の余りも append。
+    """
+    chunks: list[str] = []
+    buf: list[str] = []
+    size = 0
+    for line in (transcript or "").split("\n"):
+        add = len(line) + (1 if buf else 0)  # 連結時の改行ぶん
+        if buf and size + add > chunk_chars:
+            chunks.append("\n".join(buf))
+            buf = [line]
+            size = len(line)
+        else:
+            buf.append(line)
+            size += add
+    if buf:
+        chunks.append("\n".join(buf))
+    return chunks
+
+
+def condense_transcript(llm, model: str, transcript: str, cfg,
+                        asr: bool = False, _depth: int = 0) -> str:
+    """巨大単話transcriptを map-reduce で圧縮した「後段用 analysis_transcript」を返す。
+
+    生 transcript は別に store 済み（recall 無傷）。ここは cast/story/理解/感想 の LLM が
+    context を溢れさせないための作業用縮約。深さ2で打ち切り、無限ループを防ぐ。
+    asr=True（音声認識由来）なら map 段のプロンプトにも誤変換の警告を入れる。
+    """
+    chunk_chars = getattr(cfg, "condense_chunk_chars", 12000)
+    chunks = _split_transcript_by_lines(transcript, chunk_chars)
+    if len(chunks) <= 1:
+        return transcript  # これ以上割れない（呼び側#1a側で最終 error→skip の安全網あり）
+    digests: list[str] = []
+    for i, ch in enumerate(chunks):
+        sys_c, pre_c, vol_c = prompts.build_condense_chunk(ch, i + 1, len(chunks), asr=asr)
+        digests.append(llm.complete(system=sys_c, stable_prefix=pre_c, volatile=vol_c))
+    combined = "\n\n".join(
+        f"── 区間{i + 1}/{len(digests)} ──\n{d}" for i, d in enumerate(digests)
+    )
+    if _depth < 2 and transcript_too_large(combined, cfg):
+        return condense_transcript(llm, model, combined, cfg, asr=asr, _depth=_depth + 1)
+    return combined
+
+
 def _covered_max(store) -> int:
     blocks = store.read_blocks()
     return blocks[-1]["ep_hi"] if blocks else 0

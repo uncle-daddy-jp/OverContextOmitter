@@ -27,6 +27,8 @@ logger = logging.getLogger("oco.whisper")
 
 
 class WhisperSource:
+    used_backend = "whisper"
+
     def __init__(self, cfg):
         self._cfg = cfg
         self._model = None

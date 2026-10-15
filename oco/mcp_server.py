@@ -109,6 +109,21 @@ def oco_recall(title: str, keyword: str, persona_id: str | None = None,
 
 
 @mcp.tool()
+def oco_search_lines(title: str, q: str, episode: int | None = None,
+                     context: int = 8, limit: int = 5, series_id: str | None = None) -> dict:
+    """うろ覚えのセリフ・出来事を全話横断であいまい検索（表記揺れ・2行に割れた字幕も拾う）。
+
+    - hits: セリフ。前後 context 行・直前の場面説明・その話の客観あらすじが付く
+    - scene_hits: 場面説明の行＋直後に続くセリフ行（「◯◯が逃げたシーン」等に効く）
+    - story_hits: 客観あらすじの文＋その話の場面説明の並び
+    どれも閾値以上が無いときは近いセリフを low_confidence=true で返す（found=false）。
+    """
+    return _safe(lambda: _service().search_lines(
+        title=title, series_id=series_id, q=q, episode=episode,
+        context=context, limit=limit))
+
+
+@mcp.tool()
 def oco_list_blocks(title: str, series_id: str | None = None) -> dict:
     """§4.5 封印済みの圧縮ブロック一覧（block_index / ep範囲 / block_size）。"""
     return _safe(lambda: _service().list_blocks(title=title, series_id=series_id))

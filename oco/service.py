@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 import threading
@@ -22,8 +23,17 @@ from pathlib import Path
 
 from .config import Config
 from .db import init_db, transaction
+from .embed import embed_query
 from .personas import load_persona
 from .pipeline import build_store, process_episode
+
+logger = logging.getLogger("oco.service")
+
+# 同一(series_id, episode, persona_id)の未終了ジョブをこの秒数まで in-flight とみなす。
+# これより古い running/queued はクラッシュ遺骸（プロセス再起動でrunningのまま死んだ等）と
+# 判断して重複排除せず新規作成を許す＝永久にそのエピソードが塞がるのを防ぐ。
+# 60分番組でも実測29分なので3時間は正常走行と誤検知しない安全マージン。
+_INFLIGHT_STALE_SEC = 3 * 60 * 60
 
 
 def _slugify(title: str) -> str:
@@ -196,6 +206,25 @@ class OcoService:
         store = build_store(self.cfg, s["series_id"], s["title"])
         return {**s, "hits": store.recall(keyword, persona=persona_id)}
 
+    def search_lines(self, *, title=None, series_id=None, q: str, episode: int | None = None,
+                     context: int = 8, limit: int = 5) -> dict:
+        """うろ覚えのセリフ・出来事を全話横断で探す（前後文脈・場面説明・あらすじ同梱）。
+
+        セリフ(hits)・場面説明(scene_hits)・あらすじ文(story_hits)を同時に返す。
+        作品が解決できなければ SeriesNotFound / AmbiguousSeries を伝播（他の取り出しと同じ）。
+        """
+        s = self.resolve_series(title=title, series_id=series_id)
+        store = build_store(self.cfg, s["series_id"], s["title"])
+        query_vec = None
+        if self.cfg.embed_base_url and q.strip():
+            try:
+                query_vec = embed_query(self.cfg, q)
+            except Exception as e:                  # 埋め込みサーバーが落ちていても検索は止めない
+                logger.warning("embed_query 失敗・文字検索だけで返す: %r", e)
+        res = store.search_lines(q, episode=episode, context=context, limit=limit,
+                                 query_vec=query_vec, model=self.cfg.embed_model)
+        return {**s, "q": q, "episode": episode, **res}
+
     # ── 圧縮ブロック（§4.5 作業コンテキストの中身を外から確認/取得） ────────
     def list_blocks(self, *, title=None, series_id=None) -> dict:
         """封印済みの圧縮ブロック一覧（メタのみ・客観なので persona 非依存）。"""
@@ -317,9 +346,12 @@ class OcoService:
         sid, title = s["series_id"], s["title"]
 
         # 既処理スキップ（overwrite=false かつ ①②③揃い）。戻り値は get_job_status と同形に正規化
+        # ※outlook だけ `is not None` で見る: 単発回は生成せず**空文字**を保存するので、
+        #   truthy 判定だと処理済みなのに毎回まるごと再生成してしまう。
         if not overwrite:
             b = self._bundle(sid, title, episode, persona_id)
-            if b["story"] and b["understanding"] and b["review"]["impression"] and b["review"]["outlook"]:
+            if (b["story"] and b["understanding"] and b["review"]["impression"]
+                    and b["review"]["outlook"] is not None):
                 return {"job_id": None, "state": "done", "skipped": True,
                         "series_id": sid, "title": title, "episode": episode,
                         "persona_id": persona_id, "result": b}
@@ -327,6 +359,17 @@ class OcoService:
         job_id = uuid.uuid4().hex
         wh = webhook_url if webhook_url is not None else (self.cfg.webhook.default_url or None)
         with transaction(self.cfg.db_path) as conn:
+            # in-flight 重複排除: 同一(series,ep,persona)の未終了ジョブが既に走っていれば
+            # 新規ジョブを作らず既存を即返す（wait=true でも待たない＝呼び出し側は後で完成品を回収）。
+            dup = self._find_inflight_job(conn, sid, episode, persona_id)
+            if dup:
+                logger.info(
+                    "in-flight dedup: series=%s ep=%s persona=%s -> 既存 job=%s を再利用（新規作成せず）",
+                    sid, episode, persona_id, dup["job_id"],
+                )
+                return {"job_id": dup["job_id"], "state": "running", "already_running": True,
+                        "series_id": sid, "title": title, "episode": episode,
+                        "persona_id": persona_id}
             conn.execute(
                 "INSERT INTO oco_jobs (job_id, series_id, episode_number, persona_id, state, phase, webhook_url) "
                 "VALUES (?, ?, ?, ?, 'queued', 'queued', ?)",
@@ -339,6 +382,23 @@ class OcoService:
             return self.get_job_status(job_id)
         return {"job_id": job_id, "series_id": sid, "title": title,
                 "episode": episode, "persona_id": persona_id, "state": "queued"}
+
+    def _find_inflight_job(self, conn, sid: str, episode: int, persona_id: str):
+        """同一(series_id, episode, persona_id)で state が未終了(queued/running)かつ
+        updated_at が _INFLIGHT_STALE_SEC 以内の既存ジョブ行を返す（無ければ None）。
+
+        updated_at は state 遷移時のみ更新（処理中は running 開始時刻のまま据え置き）だが、
+        正常走行は最長でも約29分なので3時間しきい値なら誤検知しない。クラッシュ遺骸
+        （runningのまま更新が止まった行）はしきい値超えで in-flight とみなさず新規作成を許す。
+        """
+        return conn.execute(
+            "SELECT job_id FROM oco_jobs "
+            "WHERE series_id=? AND episode_number=? AND persona_id=? "
+            "AND state IN ('queued', 'running') "
+            "AND updated_at >= datetime('now', ?) "
+            "ORDER BY created_at DESC LIMIT 1",
+            (sid, episode, persona_id, f"-{_INFLIGHT_STALE_SEC} seconds"),
+        ).fetchone()
 
     def _run(self, job_id, sid, title, ep, media_path, persona_id, persona_text,
              webhook_url, video_path=None):

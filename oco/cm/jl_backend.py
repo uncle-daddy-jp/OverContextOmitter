@@ -17,6 +17,11 @@ Amatsukaze 流の肝＝**明るさに不変な“ロゴ形状の相関”で見�
 
 ※ より精密にしたいなら Amatsukaze の .lgd（学習済みロゴ・α込み）読込や、join_logo_scp 流の
   シーンチェンジ併用での境界整形が差し替え可能（将来のフィデリティ向上）。
+
+★ 引退（2026-07-19）: 白半透明ロゴが明るい画面で消える＝明るいアニメで原理的に誤検出する
+  ことが実測で確定（NCC 分布に二峰性が出ない）。既定 backend は "chapter"
+  （Amatsukaze 本体の join_logo_scp が出すチャプター sidecar を読む chapter_backend.py）へ
+  移行済み。本ファイルはロールバック用に残置。
 """
 
 from __future__ import annotations
@@ -149,26 +154,3 @@ def _merge(ranges: list[CMRange], gap: float) -> list[CMRange]:
         else:
             out.append(r)
     return out
-
-
-class ChapterCMProvider:
-    """サイドカーのチャプターファイルから CM レンジを読む軽量版（将来）。"""
-
-    def __init__(self, cfg):
-        self._cfg = cfg
-
-    def ranges(self, media_path: str | None) -> list[CMRange]:
-        if not media_path:
-            return []
-        media = Path(media_path)
-        for ext in (".chapter", ".txt"):
-            sidecar = media.with_suffix(ext)
-            if sidecar.exists():
-                return self._parse_chapter(sidecar.read_text(encoding="utf-8"))
-        return []
-
-    @staticmethod
-    def _parse_chapter(_text: str) -> list[CMRange]:
-        raise NotImplementedError(
-            "チャプター形式は実サイドカーを見て実装する（録画フロー依存）"
-        )

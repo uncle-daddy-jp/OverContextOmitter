@@ -83,6 +83,23 @@ def test_auto_falls_back_to_whisper_when_extraction_raises(tmp_path, monkeypatch
     assert calls["whisper"] == 1
 
 
+def test_auto_falls_back_to_whisper_when_captions_are_only_in_cm(tmp_path, monkeypatch):
+    # 字幕が CM 区間の中にしか無い（番宣だけ字幕付き）→ 本編の字幕は無い扱いで ASR に落ちる
+    from oco.cm import CMRange
+
+    calls = _patch_auto(monkeypatch, has_stream=True,
+                        arib_result=[Line(start=302.0, end=304.0, text="番宣", speaker=None)])
+
+    class _CM:
+        def ranges(self, _p):
+            return [CMRange(start=274.0, end=307.0)]
+
+    monkeypatch.setattr("oco.cm.build_cm_provider", lambda _c: _CM())
+    out = AutoSource(_cfg(tmp_path, "auto")).lines("/x/ep.ts")
+    assert [l.text for l in out] == ["ASRだよ"]
+    assert calls["whisper"] == 1
+
+
 def test_auto_uses_whisper_when_no_subtitle_stream(tmp_path, monkeypatch):
     calls = _patch_auto(monkeypatch, has_stream=False, arib_result=[])
     out = AutoSource(_cfg(tmp_path, "auto")).lines("/x/ep.ts")

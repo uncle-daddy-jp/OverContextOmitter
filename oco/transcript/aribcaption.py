@@ -14,6 +14,8 @@ from ..subtitles.extract import extract_ass
 
 
 class AribCaptionSource:
+    used_backend = "aribcaption"
+
     def lines(self, media_path: str) -> list[Line]:
         p = Path(media_path)
         suffix = p.suffix.lower()

@@ -145,6 +145,17 @@ def recall(keyword: str, title: str | None = None, series_id: str | None = None,
     return svc.recall(title=title, series_id=series_id, keyword=keyword, persona_id=persona_id)
 
 
+@app.get("/lines/search", dependencies=[Depends(require_auth)])
+def search_lines(q: str, title: str | None = None, series_id: str | None = None,
+                 episode: int | None = None, context: int = Query(8), limit: int = Query(5)):
+    """うろ覚えのセリフ・出来事を全話横断であいまい検索。
+
+    セリフ(hits)・場面説明(scene_hits)・あらすじ文(story_hits)を前後文脈つきで返す。
+    """
+    return svc.search_lines(title=title, series_id=series_id, q=q, episode=episode,
+                            context=context, limit=limit)
+
+
 # ── 圧縮ブロック（§4.5・作業コンテキストの中身） ──────────────────────
 @app.get("/blocks", dependencies=[Depends(require_auth)])
 def list_blocks(title: str | None = None, series_id: str | None = None):

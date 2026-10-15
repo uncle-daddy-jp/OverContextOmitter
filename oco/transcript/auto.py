@@ -22,11 +22,14 @@ logger = logging.getLogger("oco.transcript.auto")
 class AutoSource:
     def __init__(self, cfg):
         self._cfg = cfg
+        # 実際にどちらを使ったかは lines() で確定する（pipeline が ASR警告の要否に使う）
+        self.used_backend = "aribcaption"
 
     def lines(self, media_path: str) -> list[Line]:
         from .aribcaption import AribCaptionSource
 
         p = Path(media_path)
+        self.used_backend = "aribcaption"
         if p.suffix.lower() == ".ass":
             return AribCaptionSource().lines(media_path)
 
@@ -41,11 +44,16 @@ class AutoSource:
                 logger.warning("ARIB字幕の抽出に失敗→whisper(ASR)にフォールバック: %s",
                                media_path, exc_info=True)
                 lines = []
-            if lines:
+            # 本文の判定は CM を除いてから。CM/番宣だけ字幕付きの局があり、その数行で
+            # 「字幕あり」と誤判定すると本編が丸ごと抜ける（2026-09-24 play.12 が2行だけに）。
+            from ..cm import build_cm_provider, mask_lines
+
+            if mask_lines(lines, build_cm_provider(self._cfg.cm).ranges(media_path)):
                 return lines
-            # 字幕ストリームはあるが本文テキストが空（管理データのみの録画）→ ASR に落とす。
-            logger.info("字幕ストリームはあるが本文0行→whisper(ASR)にフォールバック: %s", media_path)
+            # 字幕ストリームはあるが本編の本文が空（管理データのみ/CMだけ字幕）→ ASR に落とす。
+            logger.info("字幕ストリームはあるが本編の本文0行→whisper(ASR)にフォールバック: %s", media_path)
 
         from .whisper import WhisperSource
 
+        self.used_backend = "whisper"   # ASR由来＝後段プロンプトに誤変換の警告を入れる
         return WhisperSource(self._cfg).lines(media_path)

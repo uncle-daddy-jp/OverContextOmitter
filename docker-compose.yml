@@ -65,6 +65,18 @@ services:
       - OCO_LLM_API_KEY=${OCO_LLM_API_KEY:-}
       - OCO_CONFIG=/app/config.toml
 
+  # 意味で引く検索の埋め込みサーバー（EmbeddingGemma 2・CPU）。config の [embed] base_url から使う。
+  # ポートは公開しない（compose ネットワーク内の oco-embed:8080 で届く）。
+  # モデルは ./models/ に置く（gitignore 済）。
+  oco-embed:
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:89f180f16f295ee496fe00924ec2118cae2efec519d1a82c605420af09d2a6df
+    command: ["-m", "/models/embeddinggemma-2-Q8_0.gguf", "--alias", "eg2", "--embeddings",
+              "--pooling", "mean", "-c", "2048", "-b", "2048", "-ub", "2048", "--parallel", "4",
+              "-t", "8", "--host", "0.0.0.0", "--port", "8080"]
+    volumes:
+      - ./models:/models:ro
+    restart: unless-stopped
+
   # テスト専用（同じイメージで pytest）
   oco-test:
     image: overcontextomitter

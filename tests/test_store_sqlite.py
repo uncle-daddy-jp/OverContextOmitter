@@ -71,6 +71,24 @@ def test_cast_carry_forward(tmp_path):
     assert s.read_latest_cast(1) is None            # 先頭は引き継ぎ無し
 
 
+def test_serial_next_and_story_check_columns(tmp_path):
+    s = _store(tmp_path)
+    s.write_story(7, "第7話")
+    assert s.read_serial_next(7) is None            # 旧データ・未判定は NULL
+    assert s.read_story_check(7) is None
+
+    s.write_serial_next(7, 0, "単発: 1話完結の刑事ドラマ")
+    s.write_story_check(7, "- 人物の取り違え: 鍵を渡したのはフェルン")
+    assert s.read_serial_next(7) == 0
+    assert "1話完結" in s.read_serial_next_reason(7)
+    assert "取り違え" in s.read_story_check(7)
+    assert s.read_story(7) == "第7話"                # 他の列は壊さない
+
+    # 単発回の outlook は NULL でなく空文字（呼び出し側の IS NOT NULL 判定を保つ）
+    s.write_outlook(7, "default", "")
+    assert s.read_outlook(7, "default") == ""
+
+
 def test_persona_prompt_dedup(tmp_path):
     s = _store(tmp_path)
     a = s.get_or_create_persona_prompt("default", "同じ本文")

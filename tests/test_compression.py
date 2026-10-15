@@ -4,7 +4,7 @@ LLM は決定論スタブ（volatile を見て封印文を返す）。生レイ�
 作業コンテキストが「圧縮ブロック＋進行中の生」に切り替わることを確認する。
 """
 
-from oco import compression
+from oco import compression, prompts
 from oco.store_sqlite import SqliteStore
 
 
@@ -130,6 +130,28 @@ def test_catch_up_seals_all_missed_blocks(tmp_path):
     # 再呼び出しは冪等（未完成の 21-25 は封印しない）
     assert compression.maybe_seal(store, llm, "m", "default", "P", None, 21, 5) is None
     assert len(store.read_blocks()) == 4
+
+
+def test_empty_outlook_is_not_carried_into_context(tmp_path):
+    """単発回の空 outlook は履歴に載らない（truthy チェックで落ちる＝空の見出しを積まない）。"""
+    store = _store(tmp_path)
+    _seed(store, 1)
+    store.write_outlook(1, "default", "")               # 第1話は単発＝予想なし
+    _seed(store, 2)
+
+    hist = compression.persona_prior_context(store, "default", ep=3, block_size=5)
+    assert hist[0]["outlook"] == "" and hist[1]["outlook"] == "第2話の予想"
+    prefix = prompts._persona_prefix("人格", hist)
+    assert prefix.count("[あなたの予想・期待]") == 1     # 空の第1話ぶんは載らない
+    assert "第2話の予想" in prefix
+
+    # ブロック封印の主観ダイジェストにも空の予想は載らない
+    llm = StubLLM()
+    for ep in range(3, 6):
+        _seed(store, ep)
+    compression.maybe_seal(store, llm, "m", "default", "P", None, 5, 5)
+    subjective = next(v for v in llm.calls if "この区間のあなたの感想" in v)
+    assert subjective.count("[予想・期待]") == 4        # 第1話（空）を除く4話ぶん
 
 
 def test_disabled_block_size_falls_back_to_full(tmp_path):

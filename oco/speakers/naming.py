@@ -17,23 +17,26 @@ from ..subtitles.ass_parser import Line
 logger = logging.getLogger("oco.speakers")
 
 
-def attribute_speakers(llm, lines: list[Line], cast_text: str | None) -> dict:
+def attribute_speakers(llm, lines: list[Line], cast_text: str | None,
+                       asr: bool = False) -> dict:
     """話者をセリフ行に付与。クラスタが2つ以上＝クラスタ命名、無ければ行単位推定。
 
     lines を破壊的に更新。返り値は {mode, changed, ...} のサマリ。
+    asr=True（音声認識由来の台本）ならプロンプトに誤変換の警告を入れる。
     """
     n_clusters = len({ln.speaker for ln in lines if ln.kind == "line" and ln.speaker})
     if n_clusters >= 2:
-        mapping = name_speakers(llm, lines, cast_text)          # ②クラスタ命名(色/diarization)
+        mapping = name_speakers(llm, lines, cast_text, asr=asr)  # ②クラスタ命名(色/diarization)
         if mapping:
             apply_names(lines, mapping)
             return {"mode": "cluster", "changed": True, "named": mapping}
         return {"mode": "cluster", "changed": False}
-    named = _attribute_per_line(llm, lines, cast_text)           # 字幕なし: テキストだけ行単位
+    named = _attribute_per_line(llm, lines, cast_text, asr)      # 字幕なし: テキストだけ行単位
     return {"mode": "per_line", "changed": named > 0, "named_lines": named}
 
 
-def _attribute_per_line(llm, lines: list[Line], cast_text: str | None) -> int:
+def _attribute_per_line(llm, lines: list[Line], cast_text: str | None,
+                        asr: bool = False) -> int:
     """各行の話者をテキストだけで推定し Line.speaker に入れる。命名できた行数を返す。"""
     idxs = [i for i, ln in enumerate(lines) if ln.kind == "line" and ln.text]
     if len(idxs) < 2:
@@ -43,7 +46,7 @@ def _attribute_per_line(llm, lines: list[Line], cast_text: str | None) -> int:
         ln = lines[i]
         mm, ss = divmod(int(ln.start), 60)
         rows.append(f"{n}. [{mm:02d}:{ss:02d}] {ln.text}")
-    sys_, pre_, vol_ = prompts.build_line_attribution("\n".join(rows), cast_text)
+    sys_, pre_, vol_ = prompts.build_line_attribution("\n".join(rows), cast_text, asr=asr)
     # 出力は全行ぶん（行番号=名前）。本文予算を行数に応じて広げる。
     out = llm.complete(system=sys_, stable_prefix=pre_, volatile=vol_,
                        max_tokens=min(8000, len(idxs) * 12 + 600))
@@ -76,7 +79,7 @@ def _label(i: int) -> str:
 
 
 def name_speakers(llm, lines: list[Line], cast_text: str | None,
-                  max_lines: int = 400) -> dict[str, str]:
+                  max_lines: int = 400, asr: bool = False) -> dict[str, str]:
     """話者クラスタ→キャラ名のマッピングを返す（確信あるものだけ・不明は除外）。"""
     # 出現順に安定したクラスタ→ラベル(話者A..)を割り当て
     order: "OrderedDict[str, int]" = OrderedDict()
@@ -101,7 +104,7 @@ def name_speakers(llm, lines: list[Line], cast_text: str | None,
     summary = "、".join(f"{label[c]}={counts[c]}発話" for c in order)
     block = f"（話者の発話数: {summary}）\n" + "\n".join(rows[:max_lines])
 
-    sys_, pre_, vol_ = prompts.build_speaker_naming(block, cast_text)
+    sys_, pre_, vol_ = prompts.build_speaker_naming(block, cast_text, asr=asr)
     out = llm.complete(system=sys_, stable_prefix=pre_, volatile=vol_)
 
     mapping: dict[str, str] = {}

@@ -61,17 +61,27 @@ presence_penalty  = 0.4
 # whisper_language = "ja"
 
 # ── CM 検出（テキスト段ではセリフ行を CM レンジでマスク） ──────────────
-# backend = "none"   … CM検出しない（既定。まず字幕だけで回す）
-#         | "jl"     … join_logo_scp + logoframe（ロゴ検出ベース・要ツール配置）
-#         | "chapter"… 既存のチャプター/AVS サイドカーを読む
+# backend = "none"   … CM検出しない（まず字幕だけで回す）
+#         | "chapter"… エンコーダ(Amatsukaze等のjoin_logo_scp+局ロゴ)が録画と同じディレクトリに
+#                      出すチャプター sidecar（OGM形式・名前に CM）を読む（推奨・解析コストゼロ）
+#         | "jl"     … 自前ロゴ検出（引退: 白半透明ロゴが明るい画面で消え誤検出・ロールバック用）
 [cm]
-backend = "none"          # "none" | "jl"(ロゴ検出・自前/民放のCMフレーム除外) | "chapter"
-# JL は局ロゴの有無を NCC で見て CM レンジを出す（暗いCMも捕捉・外部ツール不要・動画が要る）。
-# 既定値で概ね動く。CM検出レンジは テキスト行マスク＋画像フレーム除外の両方に使われる。
+backend = "chapter"       # sidecar が無いエピソードは CM 無し扱い（安全側）
+# CM検出レンジは テキスト行マスク＋画像フレーム除外の両方に使われる。
+# 以下は JL（ロゴ持続エッジ）検出パラメータ（backend="jl" へロールバックした時のみ有効）。
 # fps = 0.5                # 解析サンプリング(0.5=2秒ごと・大きいほど精密で遅い)
 # min_cm_sec = 12.0        # この長さ以上のロゴ消失=CM
 # presence_threshold = 0.35  # フレーム勾配とロゴテンプレのNCCがこれ未満=ロゴ消失
 # logo_frac = 0.5          # ロゴ画素=平均勾配が最大×これ以上
+
+# ── 意味で引く検索（任意） ───────────────────────────────────
+# 書くと /lines/search が言い回しの問いでも当たるようになる（EmbeddingGemma 2 の埋め込み）。
+# 書かなければ今までどおり文字の一致だけで探す。サーバーが落ちていても文字の一致に戻る。
+# docker-compose.yml の oco-embed サービス（./models/embeddinggemma-2-Q8_0.gguf）を立てて使う。
+# 過去の話は `oco embed --all` で埋め戻す（新しい話は処理の最後に自動で作る）。
+# [embed]
+# base_url = "http://oco-embed:8080"   # llama-server（/v1/embeddings）
+# model    = "eg2"                     # llama-server の --alias と同じ名前
 
 # ── HTTP API（常駐 oco-api） ───────────────────────────────────
 [api]

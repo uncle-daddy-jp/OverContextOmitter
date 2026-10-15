@@ -52,7 +52,7 @@ class LLMConfig:
 
 @dataclass
 class CMConfig:
-    backend: str = "none"               # "none" | "jl"（ロゴ検出・自前） | "chapter"
+    backend: str = "none"               # "none" | "jl"（ロゴ検出・自前・引退/ロールバック用） | "chapter"（Amatsukazeチャプターsidecar読取・推奨）
     # JL（ロゴ持続エッジ）検出パラメータ
     fps: float = 0.5                    # 解析サンプリング間隔（0.5=2秒ごと）
     frame_w: int = 384
@@ -117,6 +117,8 @@ class Config:
     cm: CMConfig = field(default_factory=CMConfig)
     db_path: Path | None = None         # 既定 store_dir/oco.db
     block_size: int = 5                 # §4.5 階層ローリング圧縮の1ブロック話数。0=無効（全話ベタ貼り）
+    condense_threshold_chars: int = 30000  # 単話transcriptがこの文字数超で圧縮（豊臣28574字=未満で無改変・美人工房40754字が対象）
+    condense_chunk_chars: int = 12000      # 圧縮時1チャンク文字数（行境界分割）
     recall_fts: bool = False
     media_root: Path = Path("/recordings")  # media_path はこの配下のみ許可（トラバーサル防止）
     transcript_backend: str = "aribcaption"  # "aribcaption"(既定) | "whisper"(字幕なし・ASR) | "auto"
@@ -131,6 +133,9 @@ class Config:
     scene_max_gap: float = 30.0          # 上限秒（超えるとCM疑いで除外）
     scene_max_frames: int = 16           # 1話で覗くフレーム予算（時間軸に均等配分・超過分はログ）
     scene_frame_width: int = 512         # VLMへ渡す縮小幅（解像度を落とすのが鉄則・高速化）
+    # 意味で引く検索（[embed]）。base_url 未設定なら文字 2-gram 検索だけ
+    embed_base_url: str | None = None    # llama-server（/v1/embeddings）の URL
+    embed_model: str = "eg2"
     api: ApiConfig = field(default_factory=ApiConfig)
     webhook: WebhookConfig = field(default_factory=WebhookConfig)
     auth_token: str | None = None       # API/MCP の任意 bearer（既定 None=無認証・LAN内信頼）
@@ -165,6 +170,8 @@ class Config:
             cm=CMConfig.from_dict(raw.get("cm", {})),
             db_path=db_path,
             block_size=raw.get("core", {}).get("block_size", raw.get("block_size", 5)),
+            condense_threshold_chars=raw.get("core", {}).get("condense_threshold_chars", raw.get("condense_threshold_chars", 30000)),
+            condense_chunk_chars=raw.get("core", {}).get("condense_chunk_chars", raw.get("condense_chunk_chars", 12000)),
             recall_fts=raw.get("recall_fts", False),
             media_root=Path(raw.get("media_root", "/recordings")),
             transcript_backend=raw.get("transcript", {}).get("backend", "aribcaption"),
@@ -177,6 +184,8 @@ class Config:
             scene_max_gap=raw.get("scene", {}).get("max_gap", 30.0),
             scene_max_frames=raw.get("scene", {}).get("max_frames", 12),
             scene_frame_width=raw.get("scene", {}).get("frame_width", 768),
+            embed_base_url=raw.get("embed", {}).get("base_url") or None,
+            embed_model=raw.get("embed", {}).get("model", "eg2"),
             api=ApiConfig.from_dict(raw.get("api", {})),
             webhook=WebhookConfig.from_dict(raw.get("webhook", {})),
             auth_token=auth_token,

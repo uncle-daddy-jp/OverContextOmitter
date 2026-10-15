@@ -44,11 +44,24 @@ class SceneEnricher:
                 cov["dropped"],
             )
         out: list[Line] = []
+        failures = 0
         for t in times:
             jpg = extract_frame(video_path, t, width=self._cfg.scene_frame_width)
             if not jpg:
                 continue
-            desc = self._vision.describe(image_jpeg=jpg, prompt=SCENE_PROMPT)
+            # vision LLM は非致命扱い＝落ちても scene を諦めて text だけで完走させる
+            # （VLM エンドポイント死亡で episode 全体を落とさない。OCO の "多少欠けてもOK" 哲学）
+            try:
+                desc = self._vision.describe(image_jpeg=jpg, prompt=SCENE_PROMPT)
+            except Exception as e:  # noqa: BLE001 接続/HTTP/デコード等すべて非致命
+                failures += 1
+                logger.warning("scene: フレーム %.1fs の vision 失敗（scene 省略）: %s", t, e)
+                # 一度も成功しないまま連続失敗＝エンドポイント死亡とみなし、
+                # 残りフレームを叩かず即中止（16回の接続待ちで時間を溶かさない）
+                if failures >= 2 and not out:
+                    logger.warning("scene: vision 連続失敗＝エンドポイント不通とみなし scene 抽出を中止")
+                    break
+                continue
             if desc:
                 out.append(Line(start=t, end=t, text=desc, speaker=None, kind="scene"))
         return out

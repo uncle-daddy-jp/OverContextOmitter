@@ -51,6 +51,12 @@ def _migrate(conn) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(oco_episodes)")}
     if "cast_roster_text" not in cols:
         conn.execute("ALTER TABLE oco_episodes ADD COLUMN cast_roster_text TEXT")
+    if "story_check_text" not in cols:      # ① 検証パスの出力（監査用）
+        conn.execute("ALTER TABLE oco_episodes ADD COLUMN story_check_text TEXT")
+    if "serial_next" not in cols:           # 単発/連続の判定（NULL=旧データ・未判定）
+        conn.execute("ALTER TABLE oco_episodes ADD COLUMN serial_next INTEGER")
+    if "serial_next_reason" not in cols:
+        conn.execute("ALTER TABLE oco_episodes ADD COLUMN serial_next_reason TEXT")
 
 
 @contextmanager

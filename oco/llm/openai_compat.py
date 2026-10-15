@@ -22,7 +22,11 @@ _CHANNEL_RE = re.compile(r"<\|?channel\|?>(?:thought)?|<channel\|>|<\|/?think\|>
 
 
 def _clean_channel(text: str) -> str:
-    return _CHANNEL_RE.sub("", text or "").strip()
+    text = text or ""
+    # 素の `</think>` が content に混じったら、その手前は思考の漏れ＝捨てる（2026-09-24 要約に英文の思考が残った）
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    return _CHANNEL_RE.sub("", text.replace("<think>", "")).strip()
 
 
 class OpenAICompatLLM:

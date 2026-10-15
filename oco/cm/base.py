@@ -55,7 +55,7 @@ def build_cm_provider(cfg: "CMConfig") -> CMProvider:
 
         return JLCMProvider(cfg)
     if cfg.backend == "chapter":
-        from .jl_backend import ChapterCMProvider
+        from .chapter_backend import ChapterCMProvider
 
         return ChapterCMProvider(cfg)
     raise ValueError(f"未知の CM backend: {cfg.backend!r}（none | jl | chapter）")
